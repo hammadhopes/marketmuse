@@ -6,6 +6,12 @@ export const errorHandler = (err, req, res, next) => {
     if (err.name === "ValidationError") {
         statusCode = 400;
         message = Object.values(err.errors)[0].message;
+    } else if (err.name === "TokenExpiredError") {
+        statusCode = 401;
+        message = "Token expired";
+    } else if (err.name === "JsonWebTokenError") {
+        statusCode = 401;
+        message = "Invalid token";
     } else if (err.code === 11000) {
         statusCode = 409;
         message = "Username or email already in use";

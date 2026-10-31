@@ -1,16 +1,16 @@
 import "dotenv/config";
 
-if(!process.env.MONGO_URI) {
-    throw new Error("MONGO_URI is not defined in environment variables");
-}
+const required = ["MONGO_URI", "JWT_ACCESS_SECRET", "JWT_REFRESH_SECRET"];
 
-if(!process.env.JWT_SECRET) {
-    throw new Error("JWT_SECRET is not defined in environment variables");
+for(const key of required) {
+    if(!process.env[key]) throw new Error(`${key} is not defined in environment variables`);
 }
 
 const config = {
     MONGO_URI: process.env.MONGO_URI,
-    JWT_SECRET: process.env.JWT_SECRET
+    JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
+    JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
+    isProduction: process.env.NODE_ENV === "production"
 };
 
 export default config;

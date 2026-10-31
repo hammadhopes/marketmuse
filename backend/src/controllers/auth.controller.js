@@ -1,9 +1,13 @@
 import User from "../models/user.model.js";
-import { ApiError } from "../utils/ApiError.js";
-import config from "../config/config.js";
-import jwt from "jsonwebtoken";
 import Session from "../models/session.model.js";
-import crypto from "crypto";
+import { ApiError } from "../utils/ApiError.js";
+import { createSession } from "../utils/session.js";
+import config from "../config/config.js";
+import { 
+    clearRefreshCookie, REFRESH_COOKIE_NAME, REFRESH_TTL_MS, signAccessToken, signRefreshToken, setRefreshCookie 
+} from "../utils/token.js";
+
+
 
 export async function register(req, res) {
     const { username, email, password } = req.body;
@@ -15,44 +19,15 @@ export async function register(req, res) {
         username,
         email,
         password
-    }); // user created even if error comes later below the code
-
-    const refreshToken = jwt.sign(
-        { id: user._id },
-        config.JWT_SECRET,
-        { expiresIn: "7d" }
-    );
-
-    const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
-
-    const session = await Session.create({
-        user: user._id,
-        refreshTokenHash,
-        ip: req.ip,
-        userAgent: req.headers["user-agent"]
-    });
-
-    const accessToken = jwt.sign(
-        { id: user._id, sessionId: session._id },
-        config.JWT_SECRET,
-        { expiresIn: "15m" }
-    );
-
-    res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    }); 
 
     res.status(201).json({
         success: true,
-        message: "User registered successfully",
+        message: "Account created successfully",
         user: {
-            username,
-            email
-        },
-        accessToken
+            username: user.username,
+            email: user.email
+        }
     });
 }
 
@@ -60,40 +35,15 @@ export async function login(req, res) {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
+    const isMatch = await user.matchPassword(password);
 
-    if(!user) throw new ApiError(401, "Invalid email or password");
+    if(!user || !isMatch) {
+        throw new ApiError(401, "Invalid email or password");
+    }
 
-    if(!user.matchPassword(password)) throw new ApiError(401, "Invalid email or password");
+    const accessToken = createSession(user, req, res);
 
-    const refreshToken = jwt.sign(
-        { id: user._id },
-        config.JWT_SECRET,
-        { expiresIn: "7d" }
-    );
-
-    const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
-
-    const session = await Session.create({
-        user: user._id,
-        refreshTokenHash,
-        ip: req.ip,
-        userAgent: req.headers["user-agent"]
-    });
-
-    const accessToken = jwt.sign(
-        { id: user._id, sessionId: session._id },
-        config.JWT_SECRET,
-        { expiresIn: "15m" }
-    );
-
-    res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
-    res.status(201).json({
+    res.status(200).json({
         success: true,
         message: "Logged in successfully",
         user: {
@@ -105,20 +55,11 @@ export async function login(req, res) {
 }
 
 export async function logout(req, res) {
-    const { refreshToken } = req.cookies;
+    const { sessionId } = req.auth;
 
-    if(!refreshToken) throw new ApiError(400, "Refresh token not found");
+    await Session.updateOne({ _id: sessionId }, { revoked: true });
 
-    const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
-
-    const session = await Session.findOne({ refreshTokenHash, revoked: false });
-
-    if(!session) throw new ApiError(400, "Invalid refresh token");
-
-    session.revoked = true;
-    await session.save();
-
-    res.clearCookie("refreshToken");
+    clearRefreshCookie(res);
 
     res.status(200).json({
         success: true,
@@ -127,23 +68,14 @@ export async function logout(req, res) {
 }
 
 export async function logoutAll(req, res) {
-    const { refreshToken } = req.cookies;
-
-    if(!refreshToken) throw new ApiError(400, "Refresh token not found")
-
-    const decoded = jwt.verify(refreshToken, config.JWT_SECRET); // shouldnt accessToken decoded be used
+    const { userId } = req.auth;
 
     await Session.updateMany(
-        {
-            user: decoded.id,
-            revoked: false
-        }, 
-        {
-            revoked: true
-        }
+        { user: userId, revoked: false }, 
+        { revoked: true }
     );
 
-    res.clearCookie("refreshToken");
+    clearRefreshCookie(res);
 
     res.status(200).json({
         success: true,
@@ -152,48 +84,40 @@ export async function logoutAll(req, res) {
 }
 
 export async function getMe(req, res) {
+    const { userId } = req.auth;
 
+    const user = await User.findById(userId).select("username email createdAt");
+    if(!user) throw new ApiError(404, "User not found");
+
+    res.status(200).json({
+        success: true,
+        user
+    });
 }
 
-export async function refreshToken(req, res) {
-    const { refreshToken } = req.cookies;
+export async function refresh(req, res) {
+    const incoming = req.cookies[REFRESH_COOKIE_NAME];
+    if(!incoming) throw new ApiError(401, "Refresh token not found");
 
-    if(!refreshToken) throw new ApiError(401, "Refresh token not found");
+    const decoded = jwt.verify(incoming, config.JWT_REFRESH_SECRET);
 
-    const decoded = jwt.verify(refreshToken, config.JWT_SECRET);
-
-    const refreshTokenHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
-
-    const session = await Session.findOne({ refreshTokenHash, revoked: false });
-
+    const session = await Session.findOne({
+        _id: decoded.sessionId,
+        refreshTokenHash: hashToken(incoming),
+        revoked: false
+    });
     if(!session) throw new ApiError(401, "Invalid refresh token");
 
-    const newRefreshToken = jwt.sign(
-        { id: decoded.id },
-        config.JWT_SECRET,
-        { expiresIn: "7d" }
-    );
-
-    const newRefreshTokenHash = crypto.createHash("sha256").update(newRefreshToken).digest("hex");
-    session.refreshTokenHash = newRefreshTokenHash;
+    const newRefreshToken = signRefreshToken(decoded.id, session._id);
+    session.refreshTokenHash = hashToken(newRefreshToken);
+    session.expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
     await session.save();
 
-    const accessToken = jwt.sign(
-        { id: decoded.id }, // session id here too?
-        config.JWT_SECRET,
-        { expiresIn: "15m" }
-    );
-
-    res.cookie("refreshToken", newRefreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setRefreshCookie(res, newRefreshToken);
 
     res.status(200).json({
         success: true,
         message: "Access token refreshed successfully",
-        accessToken
-    })
+        accessToken: signAccessToken(decoded.id, session._id)
+    });
 }
