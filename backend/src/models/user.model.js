@@ -6,7 +6,8 @@ const userSchema = new mongoose.Schema({
         type: String,
         unique: true,
         sparse: true,
-        trim: true
+        trim: true,
+        lowercase: true
     },
     email: {
         type: String,
@@ -22,6 +23,10 @@ const userSchema = new mongoose.Schema({
     isEmailVerified: {
         type: Boolean,
         default: false
+    },
+    usernameChanges: {
+        type: [Date],
+        default: []
     }
 }, { timestamps: true });
 

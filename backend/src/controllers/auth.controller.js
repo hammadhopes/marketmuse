@@ -1,13 +1,15 @@
 import User from "../models/user.model.js";
 import Session from "../models/session.model.js";
 import Otp from "../models/otp.model.js";
+import jwt from "jsonwebtoken";
 import { ApiError } from "../utils/ApiError.js";
 import { createSession } from "../utils/session.js";
 import config from "../config/config.js";
 import { issueVerificationOtp } from "../utils/verification.js";
 import { hashOtp, isSameHash, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_MS } from "../utils/otp.js";
+import { saveWithUsername, USERNAME_CHANGE_LIMIT, USERNAME_CHANGE_WINDOW_MS } from "../utils/username.js";
 import { 
-    clearRefreshCookie, REFRESH_COOKIE_NAME, REFRESH_TTL_MS, signAccessToken, signRefreshToken, setRefreshCookie 
+    clearRefreshCookie, REFRESH_COOKIE_NAME, REFRESH_TTL_MS, signAccessToken, signRefreshToken, setRefreshCookie, hashToken 
 } from "../utils/token.js";
 
 
@@ -15,7 +17,7 @@ import {
 export async function register(req, res) {
     const { email, password } = req.body;
 
-    let user = await user.findOne({ email });
+    let user = await User.findOne({ email });
 
     if(user?.isEmailVerified) throw new ApiError(409, "Email already in use");
 
@@ -39,9 +41,8 @@ export async function login(req, res) {
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
-    const isMatch = await user.matchPassword(password);
 
-    if(!user || !isMatch) {
+    if(!user || !(await user.matchPassword(password))) {
         throw new ApiError(401, "Invalid email or password");
     }
 
@@ -49,7 +50,7 @@ export async function login(req, res) {
         throw new ApiError(403, "Please verify your email to continue", "EMAIL_NOT_VERIFIED")
     }
 
-    const accessToken = createSession(user, req, res);
+    const accessToken = await createSession(user, req, res);
 
     res.status(200).json({
         success: true,
@@ -58,7 +59,6 @@ export async function login(req, res) {
             username: user.username ?? null,
             email: user.email
         },
-        needsUsername: !user.username,
         accessToken
     });
 }
@@ -161,7 +161,7 @@ export async function verifyEmail(req, res) {
     if(!deletedCount) throw new ApiError(400, "Invalid or expired code");
 
     user.isEmailVerified = true;
-    await user.save();
+    await saveWithUsername(user);
 
     const accessToken = await createSession(user, req, res);
 
@@ -169,7 +169,6 @@ export async function verifyEmail(req, res) {
         success: true,
         message: "Email verified successfully",
         user: { email: user.email, username: user.username ?? null },
-        needsUsername: !user.username,
         accessToken
     });
 }
@@ -187,5 +186,55 @@ export async function resendVerificationCode(req, res) {
         success: true,
         message: "If this email is waiting for verification, a new code has been sent",
         cooldownSeconds: OTP_RESEND_COOLDOWN_MS / 1000 
+    });
+}
+
+export async function setUsername(req, res) {
+    const { username } = req.body;
+    const { userId } = req.auth;
+
+    const windowStart = new Date(Date.now() - USERNAME_CHANGE_WINDOW_MS);
+    await User.updateOne({ _id: userId }, { $pull: { usernameChanges: { $lte: windowStart } } });
+
+    let user;
+    try {
+        user = await User.findOneAndUpdate(
+            { 
+                _id: userId, 
+                username: { $ne: username },
+                [`usernameChanges.${USERNAME_CHANGE_LIMIT - 1}`]: { $exists: false }
+            },
+            { $set: { username }, $push: { usernameChanges: new Date() } },
+            { new: true }
+        );
+    } catch(err) {
+        if(err.code === 11000) {
+            throw new ApiError(409, "This username is already taken", "USERNAME_TAKEN");
+        }
+        throw err;
+    }
+
+    if(!user) {
+        const current = await User.findById(userId).select("username usernameChanges");
+        if(!current) throw new ApiError(404, "User not found");
+
+        if(current.username === username) {
+            throw new ApiError(400, "That is already your username");
+        }
+
+        const oldest = current.usernameChanges[0] ?? new Date();
+        const retryAt = new Date(oldest.getTime() + USERNAME_CHANGE_WINDOW_MS);
+
+        throw new ApiError(
+            429,
+            `You can change your username ${USERNAME_CHANGE_LIMIT} times every 3 days. Try again after ${retryAt.toISOString()}`,
+            "USERNAME_CHANGE_LIMIT"
+        );
+    }
+
+    res.status(200).json({
+        success: true,
+        message: "Username changed successfully",
+        user: { email: user.email, username: user.username }
     });
 }

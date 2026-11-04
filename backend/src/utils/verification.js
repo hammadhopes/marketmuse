@@ -14,7 +14,7 @@ export async function issueVerificationOtp(user) {
 
     const code = generateOtp();
 
-    await Otp.deleteOne({ user: user_id, purpose: PURPOSE });
+    await Otp.deleteOne({ user: user._id, purpose: PURPOSE });
 
     const otp = await Otp.create({
         user: user._id,
