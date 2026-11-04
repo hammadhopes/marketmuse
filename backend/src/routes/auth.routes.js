@@ -1,7 +1,7 @@
 import Router from "express";
 import * as authController from "../controllers/auth.controller.js";
 import { validate } from "../middlewares/validate.middleware.js";
-import { registerSchema, loginSchema } from "../validators/auth.validator.js";
+import { registerSchema, loginSchema, verifyEmailSchema, resendVerificationSchema } from "../validators/auth.validator.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 
 const authRouter = Router();
@@ -17,5 +17,9 @@ authRouter.post("/logout-all", requireAuth, authController.logoutAll);
 authRouter.get("/get-me", requireAuth, authController.getMe);
 
 authRouter.post("/refresh-token", authController.refresh);
+
+authRouter.post("/verify-email", validate(verifyEmailSchema), authController.verifyEmail);
+
+authRouter.post("/resend-verification", validate(resendVerificationSchema), authController.resendVerificationCode);
 
 export default authRouter;

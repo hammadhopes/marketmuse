@@ -1,8 +1,11 @@
 import User from "../models/user.model.js";
 import Session from "../models/session.model.js";
+import Otp from "../models/otp.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { createSession } from "../utils/session.js";
 import config from "../config/config.js";
+import { issueVerificationOtp } from "../utils/verification.js";
+import { hashOtp, isSameHash, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_MS } from "../utils/otp.js";
 import { 
     clearRefreshCookie, REFRESH_COOKIE_NAME, REFRESH_TTL_MS, signAccessToken, signRefreshToken, setRefreshCookie 
 } from "../utils/token.js";
@@ -10,24 +13,25 @@ import {
 
 
 export async function register(req, res) {
-    const { username, email, password } = req.body;
+    const { email, password } = req.body;
 
-    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
-    if(existingUser) throw new ApiError(409, "Username or email already in use");
+    let user = await user.findOne({ email });
 
-    const user = await User.create({
-        username,
-        email,
-        password
-    }); 
+    if(user?.isEmailVerified) throw new ApiError(409, "Email already in use");
+
+    if(user) {
+        await issueVerificationOtp(user);
+        user.password = password;
+        await user.save();
+    } else {
+        user = await User.create({ email, password });
+        await issueVerificationOtp(user);
+    }
 
     res.status(201).json({
         success: true,
-        message: "Account created successfully",
-        user: {
-            username: user.username,
-            email: user.email
-        }
+        message: "Verification code sent to your email",
+        email: user.email
     });
 }
 
@@ -41,15 +45,20 @@ export async function login(req, res) {
         throw new ApiError(401, "Invalid email or password");
     }
 
+    if(!user.isEmailVerified) {
+        throw new ApiError(403, "Please verify your email to continue", "EMAIL_NOT_VERIFIED")
+    }
+
     const accessToken = createSession(user, req, res);
 
     res.status(200).json({
         success: true,
         message: "Logged in successfully",
         user: {
-            username: user.username,
+            username: user.username ?? null,
             email: user.email
         },
+        needsUsername: !user.username,
         accessToken
     });
 }
@@ -119,5 +128,64 @@ export async function refresh(req, res) {
         success: true,
         message: "Access token refreshed successfully",
         accessToken: signAccessToken(decoded.id, session._id)
+    });
+}
+
+export async function verifyEmail(req, res) {
+    const { email, code } = req.body;
+
+    const user = await User.findOne({ email });
+    if(!user || user.isEmailVerified) throw new ApiError(400, "Invalid or expired code");
+
+    const otp = await Otp.findOneAndUpdate(
+        {
+            user: user._id,
+            purpose: "email_verification",
+            expiresAt: { $gt: new Date() },
+            attempts: { $lt: OTP_MAX_ATTEMPTS }
+        },
+        { $inc: { attempts: 1 } },
+        { new: true }
+    );
+
+    if(!otp) throw new ApiError(400, "Invalid or expired code. Please request a new one.");
+
+    if(!isSameHash(otp.codeHash, hashOtp(user._id, code))) {
+        const left = OTP_MAX_ATTEMPTS - otp.attempts;
+        throw new ApiError(400, left > 0
+            ? `Incorrect code. ${left} attempts left.`
+            : "Incorrect code. No attempts left, please request a new code.");
+    }
+
+    const { deletedCount } = await Otp.deleteOne({ _id: otp._id });
+    if(!deletedCount) throw new ApiError(400, "Invalid or expired code");
+
+    user.isEmailVerified = true;
+    await user.save();
+
+    const accessToken = await createSession(user, req, res);
+
+    res.status(200).json({
+        success: true,
+        message: "Email verified successfully",
+        user: { email: user.email, username: user.username ?? null },
+        needsUsername: !user.username,
+        accessToken
+    });
+}
+
+export async function resendVerificationCode(req, res) {
+    const { email } = req.body;
+
+    const user = await User.findOne({ email });
+
+    if(user && !user.isEmailVerified) {
+        await issueVerificationOtp(user);
+    }
+
+    res.status(200).json({
+        success: true,
+        message: "If this email is waiting for verification, a new code has been sent",
+        cooldownSeconds: OTP_RESEND_COOLDOWN_MS / 1000 
     });
 }

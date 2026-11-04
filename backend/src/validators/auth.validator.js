@@ -1,12 +1,16 @@
 import { z } from "zod";
 
-export const registerSchema = z.object({
-    username: z.string().trim().min(3).max(20).regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers and underscores"),
-    email: z.string().trim().toLowerCase().pipe(z.email("Invalid email address")),
-    password: z.string().min(8, "Password must be at least 8 characters").max(72, "Password must be at most 72 characters"),
+const emailField = z.string().trim().toLowerCase().pipe(z.email("Invalid email address"));
+const passwordField = z.string()
+    .min(8, "Password must be at least 8 characters")
+    .max(72, "Password must be at most 72 characters"); 
+
+export const registerSchema = z.object({ email: emailField, password: passwordField });
+export const loginSchema = z.object({ email: emailField, password: passwordField });
+
+export const verifyEmailSchema = z.object({
+    email: emailField,
+    code: z.string().trim().regex(/^\d{6}$/, "Code must be exactly 6 digits"),
 });
 
-export const loginSchema = z.object({
-    email: z.string().trim().toLowerCase().pipe(z.email("Invalid email address")),
-    password: z.string().min(8, "Password must be at least 8 characters").max(72, "Password must be at most 72 characters"),
-});
+export const resendVerificationSchema = z.object({ email: emailField });
