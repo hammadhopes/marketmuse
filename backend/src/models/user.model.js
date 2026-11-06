@@ -17,8 +17,7 @@ const userSchema = new mongoose.Schema({
         lowercase: true
     },
     password: {
-        type: String,
-        required: true
+        type: String
     },
     isEmailVerified: {
         type: Boolean,
@@ -32,11 +31,12 @@ const userSchema = new mongoose.Schema({
 
 
 userSchema.pre("save", async function() {
-    if(!this.isModified("password")) return;
+    if(!this.isModified("password") || !this.password) return;
     this.password = await bcrypt.hash(this.password, 12);
 });
 
 userSchema.methods.matchPassword = function(enteredPassword) {
+    if(!this.password) return false;
     return bcrypt.compare(enteredPassword, this.password);
 };
 

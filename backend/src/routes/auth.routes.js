@@ -24,4 +24,12 @@ authRouter.post("/resend-verification", validate(resendVerificationSchema), auth
 
 authRouter.post("/set-username", requireAuth, validate(changeUsernameSchema), authController.setUsername);
 
+authRouter.get("/google", authController.googleRedirect);
+
+authRouter.get("/google/callback", authController.googleCallback);
+
+authRouter.get("/github", authController.githubRedirect);
+
+authRouter.get("/github/callback", authController.githubCallback);
+
 export default authRouter;

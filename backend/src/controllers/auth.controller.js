@@ -2,12 +2,16 @@ import User from "../models/user.model.js";
 import Session from "../models/session.model.js";
 import Otp from "../models/otp.model.js";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { ApiError } from "../utils/ApiError.js";
 import { createSession } from "../utils/session.js";
 import config from "../config/config.js";
 import { issueVerificationOtp } from "../utils/verification.js";
 import { hashOtp, isSameHash, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_MS } from "../utils/otp.js";
 import { saveWithUsername, USERNAME_CHANGE_LIMIT, USERNAME_CHANGE_WINDOW_MS } from "../utils/username.js";
+import { googleClient, GOOGLE_STATE_COOKIE, googleStateCookieOptions, getGoogleProfile } from "../utils/google.js";
+import { GITHUB_STATE_COOKIE, githubStateCookieOptions, createPkcePair, buildGithubAuthUrl, getGithubProfile } from "../utils/github.js";
+import { findOrCreateOAuthUser } from "../utils/oauth.js";
 import { 
     clearRefreshCookie, REFRESH_COOKIE_NAME, REFRESH_TTL_MS, signAccessToken, signRefreshToken, setRefreshCookie, hashToken 
 } from "../utils/token.js";
@@ -237,4 +241,70 @@ export async function setUsername(req, res) {
         message: "Username changed successfully",
         user: { email: user.email, username: user.username }
     });
+}
+
+export async function googleRedirect(req, res) {
+    const state = crypto.randomBytes(32).toString("hex");
+
+    const { codeVerifier, codeChallenge } = await googleClient.generateCodeVerifierAsync();
+
+    res.cookie(GOOGLE_STATE_COOKIE, JSON.stringify({ state, codeVerifier }), googleStateCookieOptions);
+
+    const url = googleClient.generateAuthUrl({
+        scope: ["openid", "email", "profile"],
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        prompt: "select_account"
+    });
+
+    res.redirect(url);
+}   
+
+export async function googleCallback(req, res) {
+    try {
+        const profile = await getGoogleProfile(req, res);
+
+        const { user, isNew } = await findOrCreateOAuthUser({
+            provider: "google",
+            providerId: profile.googleId,
+            email: profile.email
+        });
+
+        await createSession(user, req, res);
+
+        res.redirect(`${config.FRONTEND_URL}/auth/callback?new=${isNew ? 1 : 0}`);
+    } catch(err) {
+        console.error("Google login failed:", err.message);
+        res.redirect(`${config.FRONTEND_URL}/login?error=google_failed`);
+    }
+}
+
+export function githubRedirect(req, res) {
+    const state = crypto.randomBytes(32).toString("hex");
+
+    const { codeVerifier, codeChallenge } = createPkcePair();
+
+    res.cookie(GITHUB_STATE_COOKIE, JSON.stringify({ state, codeVerifier }), githubStateCookieOptions);
+
+    res.redirect(buildGithubAuthUrl({ state, codeChallenge }));
+}   
+
+export async function githubCallback(req, res) {
+    try {
+        const profile = await getGithubProfile(req, res);
+
+        const { user, isNew } = await findOrCreateOAuthUser({
+            provider: "github",
+            providerId: profile.githubId,
+            email: profile.email
+        });
+
+        await createSession(user, req, res);
+
+        res.redirect(`${config.FRONTEND_URL}/auth/callback?new=${isNew ? 1 : 0}`);
+    } catch(err) {
+        console.error("GitHub login failed:", err.message);
+        res.redirect(`${config.FRONTEND_URL}/login?error=github_failed`);
+    }
 }
