@@ -3,12 +3,14 @@ import connectDatabase from "./config/database.js";
 import authRouter from "./routes/auth.routes.js";
 import cookieParser from "cookie-parser";
 import { errorHandler } from "./middlewares/error.middleware.js";
+import { apiLimiter } from "./middlewares/rateLimit.middleware.js";
 
 const app = express();
 
 // MIDDLEWARES
 app.use(express.json());
 app.use(cookieParser());
+app.use("/api", apiLimiter);
 
 // ROUTES
 app.use("/api/auth", authRouter);
