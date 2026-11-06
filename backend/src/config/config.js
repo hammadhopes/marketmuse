@@ -14,6 +14,7 @@ for(const key of required) {
 
 const config = {
     isProduction: process.env.NODE_ENV === "production",
+    TRUST_PROXY: Number(process.env.TRUST_PROXY ?? 0),
 
     MONGO_URI: process.env.MONGO_URI,
     FRONTEND_URL: process.env.FRONTEND_URL,
@@ -36,5 +37,9 @@ const config = {
     GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
     GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI,
 };
+
+if(!Number.isInteger(config.TRUST_PROXY) || config.TRUST_PROXY < 0) {
+    throw new Error("TRUST_PROXY must be 0 or a positive whole number");
+}
 
 export default config;
