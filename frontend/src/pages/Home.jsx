@@ -1,6 +1,8 @@
 import BestSeller from "../components/BestSeller.jsx";
 import Hero from "../components/Hero.jsx";
 import LatestCollection from "../components/LatestCollection.jsx";
+import NewsletterBox from "../components/NewsletterBox.jsx";
+import OurPolicy from "../components/OurPolicy.jsx";
 
 
 function Home() {
@@ -9,6 +11,8 @@ function Home() {
             <Hero />
             <LatestCollection />
             <BestSeller />
+            <OurPolicy />
+            <NewsletterBox />
         </div>
     );
 }
